@@ -3,7 +3,7 @@ import Script from 'next/script'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'LROS — Lead Ranking',
+  title: 'Throxy Persona Ranker',
   description: 'Rank leads by fit to your ideal profile.',
 }
 

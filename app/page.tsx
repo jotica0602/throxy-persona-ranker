@@ -1,9 +1,11 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
+import Image from 'next/image'
 import LeadRanking from '@/components/LeadRanking'
 import ThemeToggle from '@/components/ThemeToggle'
 import { THROXY_EXAMPLE_PROFILE } from '@/lib/exampleProfile'
+import throxyIcon from './apple-touch-icon.png'
 
 interface RankedLead {
   lead: Record<string, string>
@@ -163,8 +165,11 @@ export default function Home() {
     <div className="container">
       <div className="page-header">
         <div>
-          <h1 className="page-title">LROS</h1>
-          <p className="page-subtitle">Rank leads by how well they match your ideal profile</p>
+          <h1 className="page-title">
+            <Image src={throxyIcon} alt="" width={32} height={32} className="page-title-icon" aria-hidden />
+            Throxy Persona Ranker
+          </h1>
+          <p className="page-subtitle">Rank leads by how well they match an ideal profile</p>
         </div>
         <ThemeToggle />
       </div>
