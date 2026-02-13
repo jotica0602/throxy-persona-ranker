@@ -98,11 +98,38 @@ export function leadToText(lead: Record<string, string>): string {
   return parts.length ? `Lead. ${parts.join('. ')}` : 'Lead.'
 }
 
-/** Weight used to penalize similarity to "Avoid" (0 = no penalty). */
-export const AVOID_PENALTY_WEIGHT = 0.35
+/** Weight applied to the *excess* avoid similarity (above threshold). Keeps Target as main signal. */
+export const AVOID_PENALTY_WEIGHT = 0.45
 
-/** Weight used to reward similarity to "Prefer" (e.g. small companies → prioritize small ranges). */
-export const PREFER_BONUS_WEIGHT = 0.25
+/** Weight for Prefer bonus. Kept moderate so Target order is preserved. */
+export const PREFER_BONUS_WEIGHT = 0.2
+
+/** Only penalize when similarity to Avoid is above this (avoids over-penalizing from long Avoid text). */
+const AVOID_SIMILARITY_THRESHOLD = 0.25
+
+/**
+ * Computes a normalized lead score in [0, 1]. Target is the primary signal; Avoid and Prefer
+ * modify it without overwhelming. We only penalize Avoid when the lead clearly matches (above
+ * threshold), so that long optimizer-generated Avoid text does not pull down good Target matches.
+ */
+export function computeLeadScore(
+  simTarget: number,
+  simAvoid: number,
+  simPrefer: number,
+  hasAvoid: boolean,
+  hasPrefer: boolean
+): number {
+  const base = (simTarget + 1) / 2
+  if (!hasAvoid && !hasPrefer) {
+    return Math.max(0, Math.min(1, base))
+  }
+  const penalty = hasAvoid
+    ? AVOID_PENALTY_WEIGHT * Math.max(0, simAvoid - AVOID_SIMILARITY_THRESHOLD)
+    : 0
+  const bonus = hasPrefer ? PREFER_BONUS_WEIGHT * simPrefer : 0
+  const score = base - penalty + bonus
+  return Math.max(0, Math.min(1, score))
+}
 
 /**
  * Strip common markdown from text (e.g. optimizer output): **bold**, - bullets, # headers.

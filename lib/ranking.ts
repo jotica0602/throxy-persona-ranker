@@ -4,8 +4,7 @@ import {
   cosineSimilarity,
   leadToText,
   parseProfileForEmbedding,
-  AVOID_PENALTY_WEIGHT,
-  PREFER_BONUS_WEIGHT,
+  computeLeadScore,
 } from '@/lib/embeddings'
 
 export interface RankedLeadResult {
@@ -59,12 +58,8 @@ export async function rankLeadsAgainstPersona(
     const simTarget = cosineSimilarity(targetEmbedding, allEmbeddings[i])
     const simAvoid = avoidEmbedding ? cosineSimilarity(avoidEmbedding, allEmbeddings[i]) : 0
     const simPrefer = preferEmbedding ? cosineSimilarity(preferEmbedding, allEmbeddings[i]) : 0
-    const rawScore = simTarget - AVOID_PENALTY_WEIGHT * simAvoid + PREFER_BONUS_WEIGHT * simPrefer
-    const normalizedScore =
-      hasAvoid || hasPrefer
-        ? Math.max(0, Math.min(1, (rawScore + 1.35) / 2.6))
-        : (simTarget + 1) / 2
-    return { lead, score: normalizedScore, similarity: simTarget }
+    const score = computeLeadScore(simTarget, simAvoid, simPrefer, hasAvoid, hasPrefer)
+    return { lead, score, similarity: simTarget }
   })
 
   scored.sort((a, b) => b.score - a.score)

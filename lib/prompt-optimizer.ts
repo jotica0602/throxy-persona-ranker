@@ -1,10 +1,8 @@
 import {
   generateEmbedding,
   cosineSimilarity,
-  leadToText,
   parseProfileForEmbedding,
-  AVOID_PENALTY_WEIGHT,
-  PREFER_BONUS_WEIGHT,
+  computeLeadScore,
 } from '@/lib/embeddings'
 import type { EvalLead } from '@/lib/eval-set'
 import { GoogleGenAI } from '@google/genai'
@@ -31,14 +29,113 @@ export function spearmanCorrelation(ourRanks: number[], goldRanks: number[]): nu
 }
 
 /**
+ * Recall@k: fraction of gold top-k that appear in our top-k. 1 = all gold top-k are in our top-k.
+ */
+export function recallAtK(ourRanks: number[], goldRanks: number[], k: number): number {
+  const n = ourRanks.length
+  if (n < k || k < 1) return 0
+  const goldTopK = new Set(
+    goldRanks
+      .map((r, i) => ({ r, i }))
+      .sort((a, b) => a.r - b.r)
+      .slice(0, k)
+      .map((x) => x.i)
+  )
+  const ourTopK = new Set(
+    ourRanks
+      .map((r, i) => ({ r, i }))
+      .sort((a, b) => a.r - b.r)
+      .slice(0, k)
+      .map((x) => x.i)
+  )
+  let hit = 0
+  Array.from(goldTopK).forEach((i) => { if (ourTopK.has(i)) hit++ })
+  return hit / k
+}
+
+/**
+ * Mean reciprocal rank of gold top-3: average of 1/ourRank for each gold top-3 lead. Higher is better.
+ */
+export function mrrGoldTopK(ourRanks: number[], goldRanks: number[], k: number): number {
+  const n = ourRanks.length
+  if (n < k || k < 1) return 0
+  const goldTopKIndices = goldRanks
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => a.r - b.r)
+    .slice(0, k)
+    .map((x) => x.i)
+  let sum = 0
+  for (const i of goldTopKIndices) sum += 1 / ourRanks[i]
+  return sum / k
+}
+
+const FEEDBACK_TOP_K = 5
+
+/**
+ * Builds a short feedback string for the optimizer: which gold top-k we ranked too low,
+ * and which of our top-k are not in gold top-k. Helps the LLM adjust Target/Avoid/Prefer.
+ */
+export function buildRankingFeedback(
+  evalLeads: EvalLead[],
+  ourRanks: number[],
+  goldRanks: number[]
+): string {
+  const n = evalLeads.length
+  const k = Math.min(FEEDBACK_TOP_K, n)
+  if (k < 1) return ''
+
+  const goldTopIndices = goldRanks
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => a.r - b.r)
+    .slice(0, k)
+    .map((x) => x.i)
+  const ourTopIndices = ourRanks
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => a.r - b.r)
+    .slice(0, k)
+    .map((x) => x.i)
+
+  const label = (i: number) => {
+    const lead = evalLeads[i].lead
+    return `${lead['Full Name'] || 'Unknown'} (${lead['Company'] || 'Unknown'})`
+  }
+
+  const rankedTooLow: string[] = []
+  for (const i of goldTopIndices) {
+    if (ourRanks[i] > k) rankedTooLow.push(`${label(i)} — we ranked them ${ourRanks[i]}, gold top-${k}`)
+  }
+  const rankedTooHigh: string[] = []
+  const goldTopSet = new Set(goldTopIndices)
+  for (const i of ourTopIndices) {
+    if (!goldTopSet.has(i)) rankedTooHigh.push(`${label(i)} — we put them in top-${k}, not in gold top-${k}`)
+  }
+
+  const parts: string[] = []
+  if (rankedTooLow.length > 0) parts.push(`Gold top-${k} that we ranked too low: ${rankedTooLow.slice(0, 3).join('; ')}.`)
+  if (rankedTooHigh.length > 0) parts.push(`Our top-${k} that should not be there: ${rankedTooHigh.slice(0, 3).join('; ')}.`)
+  return parts.join(' ')
+}
+
+export interface EvalResult {
+  /** Spearman correlation with gold ranking (main metric, -1 to 1). */
+  score: number
+  /** Fraction of gold top-5 that appear in our top-5. */
+  recallAt5: number
+  /** Mean reciprocal rank for gold top-3 (higher = better). */
+  mrrTop3: number
+  ourRanks: number[]
+  goldRanks: number[]
+}
+
+/**
  * Evaluate a persona prompt on the evaluation set. Uses precomputed lead embeddings;
- * only embeds the persona (target/avoid/prefer). Returns Spearman correlation with gold ranking.
+ * only embeds the persona (target/avoid/prefer). Returns Spearman, recall@5, MRR, and ranks.
  */
 export async function evaluatePromptOnEvalSet(
   characteristics: string,
   evalLeads: EvalLead[],
   leadEmbeddings: number[][]
-): Promise<{ score: number; ourRanks: number[] }> {
+): Promise<EvalResult> {
   const { targetText, avoidText, preferText } = parseProfileForEmbedding(characteristics)
   if (!targetText || !targetText.trim()) {
     throw new Error('Profile cannot be empty.')
@@ -59,12 +156,8 @@ export async function evaluatePromptOnEvalSet(
     const simTarget = cosineSimilarity(targetEmbedding, emb)
     const simAvoid = avoidEmbedding ? cosineSimilarity(avoidEmbedding, emb) : 0
     const simPrefer = preferEmbedding ? cosineSimilarity(preferEmbedding, emb) : 0
-    const rawScore = simTarget - AVOID_PENALTY_WEIGHT * simAvoid + PREFER_BONUS_WEIGHT * simPrefer
-    const normalizedScore =
-      hasAvoid || hasPrefer
-        ? Math.max(0, Math.min(1, (rawScore + 1.35) / 2.6))
-        : (simTarget + 1) / 2
-    return { lead, goldRank: evalLeads[i].goldRank, score: normalizedScore }
+    const score = computeLeadScore(simTarget, simAvoid, simPrefer, hasAvoid, hasPrefer)
+    return { lead, goldRank: evalLeads[i].goldRank, score }
   })
 
   scored.sort((a, b) => b.score - a.score)
@@ -76,37 +169,36 @@ export async function evaluatePromptOnEvalSet(
   const ourRanks = evalLeads.map(({ lead }) => leadToOurRank.get((lead['Full Name'] || '') + '|' + (lead['Company'] || '')) ?? evalLeads.length + 1)
   const goldRanks = evalLeads.map((e) => e.goldRank)
   const score = spearmanCorrelation(ourRanks, goldRanks)
-  return { score, ourRanks }
+  const k5 = Math.min(5, evalLeads.length)
+  const k3 = Math.min(3, evalLeads.length)
+  return {
+    score,
+    recallAt5: k5 > 0 ? recallAtK(ourRanks, goldRanks, k5) : 0,
+    mrrTop3: k3 > 0 ? mrrGoldTopK(ourRanks, goldRanks, k3) : 0,
+    ourRanks,
+    goldRanks,
+  }
 }
 
-const OPTIMIZER_SYSTEM = `You help users define and refine their ideal lead profile for ranking. The profile describes their company type and who they want to reach.
+const OPTIMIZER_SYSTEM = `You are an expert at refining lead-profile prompts for a semantic ranking system. The system ranks leads by embedding similarity: it embeds Target (who we want), Avoid (who we exclude), and Prefer (what we prioritize), then scores each lead. Your goal is to refine the profile so that the resulting ranking order matches a gold standard as closely as possible.
 
-The user may give you free-form text: a few words, a paragraph, or already structured with Target/Avoid/Prefer. Your job is to identify what they are looking for (Target), what they want to avoid (Avoid), and what they prefer (Prefer), then output a refined profile with those three sections clearly filled. If the user did not mention avoid or prefer, infer from context when possible or leave those sections concise; Target is required and must capture who they want to reach.
+How to improve the score (Spearman correlation with gold ranking, range -1 to 1; higher is better):
+1. Target must describe the exact roles, company types, and criteria that characterize the gold top leads. Be specific: job titles, company size ranges, industry. The embedding model matches on meaning, so use the same vocabulary as the lead data (e.g. "VP Sales", "Head of SDR", "51-200 employees").
+2. Avoid must explicitly list the types that appear in the gold bottom ranks or that we want to exclude. Strong Avoid criteria push bad matches down; vague Avoid does not help.
+3. Prefer should capture distinguishing traits of the gold top (e.g. company size, industry focus) so that ties are broken in the right direction.
+4. When you receive feedback about "ranked too low" or "ranked too high", adjust Target to include or exclude the traits of those leads. Add them to Avoid if they should rank low, or make Target more specific so they match better if they should rank high.
 
-Do not replace their criteria with a different business or generic template. Improve by:
-1. Keeping their meaning: same type of company, same kind of targets/avoid/prefer they described or implied.
-2. Being more explicit: list concrete job titles and company sizes (e.g. "2-10 employees", "51-200") where it fits their intent.
-3. Always output exactly three sections: Target:, Avoid:, Prefer: — add missing roles or criteria they implied; if they said nothing about avoid or prefer, write a short line (e.g. "None specified.") or infer from context.
-4. Using wording that matches how leads are usually described (job title, company, size) so the ranking model can match better.
-
-The evaluation score (Spearman, -1 to 1) measures how well the prompt aligns with a gold ranking; higher is better. Your refined prompt should preserve the user's definition of target/avoid/prefer and make it more explicit so it can score higher.
-
-OUTPUT FORMAT (strict — you must follow this exactly):
-- Output ONLY the refined profile. No preamble, no "Here is...", no explanation.
-- Use plain text only. Do NOT use markdown: no asterisks (**bold**), no bullet dashes (-), no hash headers (#).
-- Use exactly these three section labels at the start of a line: "Target:", "Avoid:", "Prefer:"
-- After each label, write the content in plain prose. Use commas, "and", "or" for lists. Each section may be multiple lines.
-- Example format:
-
-Target: Vice Presidents of Operations, Technical Directors, and similar senior leadership roles responsible for infrastructure or technical leadership in companies in solar or wind energy, with 11-500 employees.
-Avoid: Companies in the traditional fossil-fuel sector such as oil and gas, coal mining, consulting firms advising energy companies, and very early-stage startups under 10 employees. Also exclude energy trading and renewable investment firms that do not operate infrastructure.
-Prefer: Companies with 51-200 employees, actively running commercial-scale renewable infrastructure such as solar farms or wind turbines, with a focus on operational deployment and grid stability rather than research and development.`
+Rules:
+- Preserve the user's intent and business context. Do not substitute a different business or persona.
+- Always output exactly three sections: Target:, Avoid:, Prefer:. Use plain prose after each label; no markdown (no **, no -, no #).
+- Output ONLY the refined profile. No preamble, no explanation.`
 
 async function proposeImprovedPromptGemini(
   currentPrompt: string,
   currentScore: number,
   history: Array<{ prompt: string; score: number }>,
-  requireDifferent?: boolean
+  requireDifferent?: boolean,
+  feedback?: string
 ): Promise<string> {
   const historyText =
     history.length > 0
@@ -114,7 +206,8 @@ async function proposeImprovedPromptGemini(
         history.map((h) => `Score ${h.score.toFixed(3)}:\n${h.prompt.slice(0, 500)}...`).join('\n---\n')
       : ''
   const diffHint = requireDifferent ? '\n\n[IMPORTANT: Output MUST be different. Refine or expand at least one of Target, Avoid, or Prefer while keeping the user\'s intent.]' : ''
-  const userContent = `Current profile (score: ${currentScore.toFixed(3)}):\n${currentPrompt}${historyText}\n\nIdentify the key parts (who they want — Target, who to exclude — Avoid, what to prefer — Prefer) and output a refined profile with exactly "Target:", "Avoid:", "Prefer:" as section labels. Use plain text only (no markdown, no ** or - bullets).${diffHint}`
+  const feedbackBlock = feedback ? `\n\nRanking feedback (use this to adjust Target/Avoid/Prefer): ${feedback}` : ''
+  const userContent = `Current profile — Spearman score: ${currentScore.toFixed(3)} (higher is better; 1 = perfect match to gold ranking).\n\n${currentPrompt}${historyText}${feedbackBlock}\n\nRefine the profile so the ranking better matches the gold order. Output only the refined profile: three sections "Target:", "Avoid:", "Prefer:" in plain text (no markdown).${diffHint}`
   const response = await getGemini().models.generateContent({
     model: 'gemini-2.5-flash',
     contents: userContent,
@@ -132,7 +225,8 @@ async function proposeImprovedPromptGroq(
   currentPrompt: string,
   currentScore: number,
   history: Array<{ prompt: string; score: number }>,
-  requireDifferent?: boolean
+  requireDifferent?: boolean,
+  feedback?: string
 ): Promise<string> {
   const historyText =
     history.length > 0
@@ -140,7 +234,8 @@ async function proposeImprovedPromptGroq(
         history.map((h) => `Score ${h.score.toFixed(3)}:\n${h.prompt.slice(0, 500)}...`).join('\n---\n')
       : ''
   const diffHint = requireDifferent ? '\n\n[IMPORTANT: Output MUST be different. Refine or expand at least one of Target, Avoid, or Prefer while keeping the user\'s intent.]' : ''
-  const userContent = `Current profile (score: ${currentScore.toFixed(3)}):\n${currentPrompt}${historyText}\n\nIdentify the key parts (who they want — Target, who to exclude — Avoid, what to prefer — Prefer) and output a refined profile with exactly "Target:", "Avoid:", "Prefer:" as section labels. Use plain text only (no markdown, no ** or - bullets).${diffHint}`
+  const feedbackBlock = feedback ? `\n\nRanking feedback (use this to adjust Target/Avoid/Prefer): ${feedback}` : ''
+  const userContent = `Current profile — Spearman score: ${currentScore.toFixed(3)} (higher is better; 1 = perfect match to gold ranking).\n\n${currentPrompt}${historyText}${feedbackBlock}\n\nRefine the profile so the ranking better matches the gold order. Output only the refined profile: three sections "Target:", "Avoid:", "Prefer:" in plain text (no markdown).${diffHint}`
   const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -170,7 +265,8 @@ async function proposeImprovedPromptAnthropic(
   currentPrompt: string,
   currentScore: number,
   history: Array<{ prompt: string; score: number }>,
-  requireDifferent?: boolean
+  requireDifferent?: boolean,
+  feedback?: string
 ): Promise<string> {
   const historyText =
     history.length > 0
@@ -178,7 +274,8 @@ async function proposeImprovedPromptAnthropic(
         history.map((h) => `Score ${h.score.toFixed(3)}:\n${h.prompt.slice(0, 500)}...`).join('\n---\n')
       : ''
   const diffHint = requireDifferent ? '\n\n[IMPORTANT: Output MUST be different. Refine or expand at least one of Target, Avoid, or Prefer while keeping the user\'s intent.]' : ''
-  const userContent = `Current profile (score: ${currentScore.toFixed(3)}):\n${currentPrompt}${historyText}\n\nIdentify the key parts (who they want — Target, who to exclude — Avoid, what to prefer — Prefer) and output a refined profile with exactly "Target:", "Avoid:", "Prefer:" as section labels. Use plain text only (no markdown, no ** or - bullets).${diffHint}`
+  const feedbackBlock = feedback ? `\n\nRanking feedback (use this to adjust Target/Avoid/Prefer): ${feedback}` : ''
+  const userContent = `Current profile — Spearman score: ${currentScore.toFixed(3)} (higher is better; 1 = perfect match to gold ranking).\n\n${currentPrompt}${historyText}${feedbackBlock}\n\nRefine the profile so the ranking better matches the gold order. Output only the refined profile: three sections "Target:", "Avoid:", "Prefer:" in plain text (no markdown).${diffHint}`
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -224,13 +321,14 @@ export async function proposeImprovedPrompt(
   currentPrompt: string,
   currentScore: number,
   history: Array<{ prompt: string; score: number }> = [],
-  options?: { optimizerProvider?: OptimizerProvider; requireDifferent?: boolean }
+  options?: { optimizerProvider?: OptimizerProvider; requireDifferent?: boolean; feedback?: string }
 ): Promise<string> {
   const provider = options?.optimizerProvider ?? 'gemini'
   const reqDiff = options?.requireDifferent ?? false
-  if (provider === 'groq') return proposeImprovedPromptGroq(currentPrompt, currentScore, history, reqDiff)
-  if (provider === 'anthropic') return proposeImprovedPromptAnthropic(currentPrompt, currentScore, history, reqDiff)
-  return proposeImprovedPromptGemini(currentPrompt, currentScore, history, reqDiff)
+  const feedback = options?.feedback
+  if (provider === 'groq') return proposeImprovedPromptGroq(currentPrompt, currentScore, history, reqDiff, feedback)
+  if (provider === 'anthropic') return proposeImprovedPromptAnthropic(currentPrompt, currentScore, history, reqDiff, feedback)
+  return proposeImprovedPromptGemini(currentPrompt, currentScore, history, reqDiff, feedback)
 }
 
 export interface OptimizationResult {
@@ -257,7 +355,8 @@ export async function runOptimization(options: {
   let currentPrompt = initialPrompt
 
   for (let iter = 0; iter < maxIterations; iter++) {
-    const { score } = await evaluatePromptOnEvalSet(currentPrompt, evalLeads, leadEmbeddings)
+    const evalResult = await evaluatePromptOnEvalSet(currentPrompt, evalLeads, leadEmbeddings)
+    const { score, ourRanks, goldRanks } = evalResult
     history.push({ prompt: currentPrompt, score })
     if (score > bestScore) {
       bestScore = score
@@ -265,9 +364,10 @@ export async function runOptimization(options: {
     }
     if (iter === maxIterations - 1) break
     const recentHistory = history.slice(-3)
-    let proposed = await proposeImprovedPrompt(currentPrompt, score, recentHistory, { optimizerProvider })
+    const feedback = buildRankingFeedback(evalLeads, ourRanks, goldRanks)
+    let proposed = await proposeImprovedPrompt(currentPrompt, score, recentHistory, { optimizerProvider, feedback })
     if (isSamePrompt(proposed, currentPrompt)) {
-      proposed = await proposeImprovedPrompt(currentPrompt, score, recentHistory, { optimizerProvider, requireDifferent: true })
+      proposed = await proposeImprovedPrompt(currentPrompt, score, recentHistory, { optimizerProvider, requireDifferent: true, feedback })
     }
     if (!proposed || proposed.length < 20) {
       currentPrompt = bestPrompt

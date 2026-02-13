@@ -3,7 +3,7 @@ import { loadEvalSet } from '@/lib/eval-set'
 import { generateEmbeddingBatch, leadToText } from '@/lib/embeddings'
 import { runOptimization, type OptimizerProvider } from '@/lib/prompt-optimizer'
 
-const DEFAULT_MAX_ITERATIONS = 4
+const DEFAULT_MAX_ITERATIONS = 6
 
 /**
  * POST /api/prompt-optimize
