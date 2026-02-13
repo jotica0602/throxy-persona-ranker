@@ -44,7 +44,7 @@ function getGemini(): GoogleGenAI {
 
 
 /**
- * Convierte un lead en un texto estructurado para embeddings (rol y empresa primero para mejor matching).
+ * Converts a lead into structured text for embeddings (role and company first for better matching).
  */
 export function leadToText(lead: Record<string, string>): string {
   const getFieldValue = (possibleFields: string[]): string => {
@@ -98,10 +98,10 @@ export function leadToText(lead: Record<string, string>): string {
   return parts.length ? `Lead. ${parts.join('. ')}` : 'Lead.'
 }
 
-/** Peso con el que se penaliza la similitud a "Avoid" (0 = no penalizar). */
+/** Weight used to penalize similarity to "Avoid" (0 = no penalty). */
 export const AVOID_PENALTY_WEIGHT = 0.35
 
-/** Peso con el que se premia la similitud a "Prefer" (ej. small companies → priorizar rangos pequeños). */
+/** Weight used to reward similarity to "Prefer" (e.g. small companies → prioritize small ranges). */
 export const PREFER_BONUS_WEIGHT = 0.25
 
 /**
@@ -118,8 +118,8 @@ function stripMarkdown(text: string): string {
 }
 
 /**
- * Separa el texto del perfil en "target", "avoid" y "prefer".
- * Acepta secciones multilínea. Soporta texto con markdown residual y lo limpia.
+ * Splits the profile text into "target", "avoid" and "prefer".
+ * Accepts multi-line sections. Strips residual markdown from text.
  */
 export function parseProfileForEmbedding(characteristics: string): {
   targetText: string
@@ -160,7 +160,7 @@ export function parseProfileForEmbedding(characteristics: string): {
 }
 
 /**
- * Genera un embedding para un texto dado (OpenAI)
+ * Generates an embedding for the given text (OpenAI).
  */
 async function generateEmbeddingOpenAI(text: string): Promise<number[]> {
   const response = await getOpenAI().embeddings.create({
@@ -247,7 +247,7 @@ async function generateEmbeddingHuggingFace(text: string): Promise<number[]> {
 }
 
 /**
- * Genera un embedding para un texto dado (Google Gemini). Reintenta en 429.
+ * Generates an embedding for the given text (Google Gemini). Retries on 429.
  */
 async function generateEmbeddingGemini(text: string): Promise<number[]> {
   let lastErr: unknown
@@ -305,14 +305,14 @@ function isRateLimitError(error: unknown): boolean {
 function getQuotaErrorMessage(error: unknown): string | null {
   const msg = error instanceof Error ? error.message : String(error)
   if (msg.includes('PerDay') || msg.includes('1000') && msg.includes('quota')) {
-    return 'Límite diario de embeddings alcanzado (1000/día en plan gratuito). Vuelve a intentarlo mañana o reduce el número de leads en el CSV.'
+    return 'Daily embedding limit reached (1000/day on free tier). Try again tomorrow or reduce the number of leads in the CSV.'
   }
   return null
 }
 
 /**
- * Genera embeddings para varios textos en una sola llamada (Gemini).
- * Reintenta con espera si la API devuelve 429 (límite de cuota).
+ * Generates embeddings for multiple texts in a single call (Gemini).
+ * Retries with backoff when the API returns 429 (quota limit).
  */
 async function generateEmbeddingBatchGemini(texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return []
@@ -344,7 +344,7 @@ async function generateEmbeddingBatchGemini(texts: string[]): Promise<number[][]
 }
 
 /**
- * Genera embeddings para varios textos (OpenAI permite batch nativo).
+ * Generates embeddings for multiple texts (OpenAI supports native batching).
  */
 async function generateEmbeddingBatchOpenAI(texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return []
@@ -356,7 +356,7 @@ async function generateEmbeddingBatchOpenAI(texts: string[]): Promise<number[][]
 }
 
 /**
- * Genera embeddings por lotes (Hugging Face Inference API directa).
+ * Generates embeddings in batches (Hugging Face Inference API direct).
  */
 async function generateEmbeddingBatchHuggingFace(texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return []
@@ -370,7 +370,7 @@ async function generateEmbeddingBatchHuggingFace(texts: string[]): Promise<numbe
 }
 
 /**
- * Genera un embedding para un texto dado (provider from AI_PROVIDER)
+ * Generates an embedding for the given text (provider from AI_PROVIDER).
  */
 export async function generateEmbedding(text: string): Promise<number[]> {
   try {
@@ -389,8 +389,8 @@ export async function generateEmbedding(text: string): Promise<number[]> {
 }
 
 /**
- * Genera embeddings por lotes. Con Gemini reduce las peticiones para respetar
- * el límite de 100 req/min del free tier.
+ * Generates embeddings in batches. With Gemini, reduces request count to stay
+ * within the 100 req/min free tier limit.
  */
 export async function generateEmbeddingBatch(texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return []
@@ -404,7 +404,7 @@ export async function generateEmbeddingBatch(texts: string[]): Promise<number[][
         const batch = texts.slice(i, i + GEMINI_EMBED_BATCH_SIZE)
         const batchResults = await generateEmbeddingBatchGemini(batch)
         results.push(...batchResults)
-        // Pausa entre lotes para no saturar cuota (100/min y 1000/día)
+        // Delay between batches to avoid exceeding quota (100/min and 1000/day)
         if (i + GEMINI_EMBED_BATCH_SIZE < texts.length) {
           await new Promise((r) => setTimeout(r, 2500))
         }
@@ -420,7 +420,7 @@ export async function generateEmbeddingBatch(texts: string[]): Promise<number[][
 }
 
 /**
- * Calcula la similitud coseno entre dos vectores de embeddings
+ * Computes the cosine similarity between two embedding vectors.
  */
 export function cosineSimilarity(a: number[], b: number[]): number {
   if (a.length !== b.length) {
@@ -450,7 +450,7 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 const EXPLANATION_SYSTEM = 'You are an expert assistant in lead analysis. Your task is to explain concisely and clearly why a lead is relevant based on the desired characteristics. Respond in English, 2-3 sentences maximum.'
 
 /**
- * Genera una explicación usando LLM (OpenAI)
+ * Generates an explanation using LLM (OpenAI).
  */
 async function generateExplanationOpenAI(
   lead: Record<string, string>,
@@ -481,7 +481,7 @@ Explain briefly why this lead is relevant to the desired characteristics.`,
 }
 
 /**
- * Genera una explicación usando LLM (Google Gemini)
+ * Generates an explanation using LLM (Google Gemini).
  */
 async function generateExplanationGemini(
   lead: Record<string, string>,
@@ -512,7 +512,7 @@ Explain briefly why this lead is relevant to the desired characteristics.`
 }
 
 /**
- * Genera una explicación usando LLM sobre por qué un lead es relevante
+ * Generates an explanation using LLM for why a lead is relevant.
  */
 export async function generateExplanation(
   lead: Record<string, string>,

@@ -29,10 +29,10 @@ export function getTableMissingMessage(supabaseErrorMessage: string): string | n
     lower.includes('schema cache')
   ) {
     return (
-      "La tabla 'leads' no existe en Supabase. " +
-      "Añade DATABASE_URL en .env.local (Supabase → Project Settings → Database → Connection string, modo Session o Direct, no Transaction), " +
-      "reinicia el servidor (npm run dev) y vuelve a intentar para crearla automáticamente. " +
-      "O créala a mano: en Supabase → SQL Editor ejecuta los archivos en supabase/migrations/."
+      "The 'leads' table does not exist in Supabase. " +
+      "Add DATABASE_URL in .env.local (Supabase → Project Settings → Database → Connection string, Session or Direct mode, not Transaction), " +
+      "restart the server (npm run dev) and try again to create it automatically. " +
+      "Or create it manually: in Supabase → SQL Editor run the files in supabase/migrations/."
     )
   }
   return null

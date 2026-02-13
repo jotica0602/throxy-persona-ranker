@@ -17,7 +17,7 @@ interface LeadRankingProps {
 }
 
 /**
- * Formatea el nombre del campo para mostrarlo de manera más legible
+ * Formats the field name for more readable display.
  */
 function formatFieldName(key: string): string {
   const fieldMap: Record<string, string> = {
@@ -40,7 +40,7 @@ function formatFieldName(key: string): string {
     return fieldMap[key]
   }
 
-  // Formatear nombres con snake_case o camelCase
+  // Format names from snake_case or camelCase
   return key
     .replace(/_/g, ' ')
     .replace(/([A-Z])/g, ' $1')
@@ -50,7 +50,7 @@ function formatFieldName(key: string): string {
 }
 
 /**
- * Obtiene el valor de un campo con diferentes nombres posibles
+ * Gets the value of a field using different possible field names.
  */
 function getFieldValue(lead: Record<string, string>, possibleFields: string[]): string {
   for (const field of possibleFields) {
@@ -63,7 +63,7 @@ function getFieldValue(lead: Record<string, string>, possibleFields: string[]): 
 }
 
 /**
- * Obtiene los campos importantes en orden de prioridad
+ * Gets the important fields in priority order.
  */
 function getImportantFields(lead: Record<string, string>): Array<{ key: string; value: string; label: string }> {
   const fields: Array<{ key: string; value: string; label: string }> = []
@@ -118,7 +118,7 @@ function getImportantFields(lead: Record<string, string>): Array<{ key: string; 
     fields.push({ key: 'linkedin', value: linkedin, label: 'LinkedIn' })
   }
 
-  // Agregar otros campos que no hayamos mostrado
+  // Add any other fields not already shown
   const shownKeys = new Set(fields.map(f => f.key.toLowerCase()))
   Object.entries(lead).forEach(([key, value]) => {
     if (value && value.trim() && !shownKeys.has(key.toLowerCase())) {
