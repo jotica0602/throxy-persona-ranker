@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { loadEvalSet } from '@/lib/eval-set'
+import { loadEvalEmbeddingsFromSupabase, storeEvalEmbeddingsInSupabase } from '@/lib/eval-embeddings-db'
 import { generateEmbeddingBatch, leadToText } from '@/lib/embeddings'
 import { runOptimization, type OptimizerProvider } from '@/lib/prompt-optimizer'
 
@@ -56,35 +57,46 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const leadTexts = evalLeads.map((e) => leadToText(e.lead))
-    // Embed in small chunks to avoid Hugging Face timeouts (ETIMEDOUT) on slow networks
-    const EMBED_CHUNK_SIZE = 12
-    const leadEmbeddings: number[][] = []
-    for (let i = 0; i < leadTexts.length; i += EMBED_CHUNK_SIZE) {
-      const chunk = leadTexts.slice(i, i + EMBED_CHUNK_SIZE)
-      let chunkEmbeddings: number[][]
-      try {
-        chunkEmbeddings = await generateEmbeddingBatch(chunk)
-      } catch (chunkErr) {
-        const isTimeout = /timeout|ETIMEDOUT|terminated/i.test(chunkErr instanceof Error ? chunkErr.message : String(chunkErr))
-        if (isTimeout && chunk.length > 1) {
-          // Retry one text at a time for this chunk
-          chunkEmbeddings = []
-          for (const text of chunk) {
-            const one = await generateEmbeddingBatch([text])
-            chunkEmbeddings.push(...one)
+    // Use cached eval embeddings from Supabase when available; otherwise compute and store
+    let leadEmbeddings: number[][]
+    const cached = await loadEvalEmbeddingsFromSupabase(evalLeads)
+    if (cached.fromCache && cached.embeddings !== null) {
+      leadEmbeddings = cached.embeddings
+    } else {
+      const leadTexts = evalLeads.map((e) => leadToText(e.lead))
+      const EMBED_CHUNK_SIZE = 12
+      leadEmbeddings = []
+      for (let i = 0; i < leadTexts.length; i += EMBED_CHUNK_SIZE) {
+        const chunk = leadTexts.slice(i, i + EMBED_CHUNK_SIZE)
+        let chunkEmbeddings: number[][]
+        try {
+          chunkEmbeddings = await generateEmbeddingBatch(chunk)
+        } catch (chunkErr) {
+          const isTimeout = /timeout|ETIMEDOUT|terminated/i.test(chunkErr instanceof Error ? chunkErr.message : String(chunkErr))
+          if (isTimeout && chunk.length > 1) {
+            chunkEmbeddings = []
+            for (const text of chunk) {
+              const one = await generateEmbeddingBatch([text])
+              chunkEmbeddings.push(...one)
+            }
+          } else {
+            throw chunkErr
           }
-        } else {
-          throw chunkErr
         }
+        leadEmbeddings.push(...chunkEmbeddings)
       }
-      leadEmbeddings.push(...chunkEmbeddings)
-    }
-    if (leadEmbeddings.length !== evalLeads.length) {
-      return NextResponse.json(
-        { error: 'Failed to compute embeddings for all evaluation leads.' },
-        { status: 500 }
-      )
+      if (leadEmbeddings.length !== evalLeads.length) {
+        return NextResponse.json(
+          { error: 'Failed to compute embeddings for all evaluation leads.' },
+          { status: 500 }
+        )
+      }
+      try {
+        await storeEvalEmbeddingsInSupabase(evalLeads, leadEmbeddings)
+      } catch (storeErr) {
+        // Supabase not configured or table missing; optimization still succeeds
+        console.warn('Eval embeddings not stored (cache disabled):', storeErr)
+      }
     }
 
     const result = await runOptimization({

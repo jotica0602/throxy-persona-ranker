@@ -21,3 +21,4 @@ export function getSupabase() {
 }
 
 export const LEADS_TABLE = 'leads'
+export const EVAL_EMBEDDINGS_TABLE = 'eval_lead_embeddings'
