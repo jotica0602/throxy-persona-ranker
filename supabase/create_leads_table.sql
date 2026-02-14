@@ -1,7 +1,3 @@
--- Copia TODO este archivo y pégalo en Supabase → SQL Editor → New query → Run.
--- Con esto la tabla leads queda creada y no necesitas DATABASE_URL.
-
--- Tabla leads
 CREATE TABLE IF NOT EXISTS public.leads (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   data jsonb NOT NULL,
