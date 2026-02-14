@@ -35,3 +35,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# eval set embebido (generado por scripts/embed-eval-csv.js)
+lib/eval-set-csv.ts
