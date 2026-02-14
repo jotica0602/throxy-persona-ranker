@@ -41,6 +41,7 @@ The ideal profile is described in natural language using **Target** (who you wan
    - Create a [Supabase](https://supabase.com) project.
    - In `.env.local`: `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`.
    - To auto-create the `leads` table: set `DATABASE_URL` (Postgres connection string from Supabase). Otherwise run the SQL in `supabase/migrations/` in the SQL Editor.
+   - For **prompt optimization**, run `supabase/migrations/003_eval_lead_embeddings.sql` so eval set embeddings are cached and not re-computed on every run.
    - Ingest CSV via API: `POST /api/leads/ingest` with `csv` file (use `?clear=1` to replace existing leads).
 
 3. **Start**
